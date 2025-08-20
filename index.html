@@ -1,0 +1,175 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Realtime Collaborative Editor</title>
+  <style>
+    :root{
+      --bg:#0f1220; --panel:#151936; --text:#e7e9ff; --muted:#9aa1c2; --accent:#6c8cff;
+    }
+    *{box-sizing:border-box}
+    body{
+      margin:0; font-family:system-ui,Segoe UI,Roboto,Inter,Arial,sans-serif;
+      background:var(--bg); color:var(--text); min-height:100vh; display:flex; flex-direction:column;
+    }
+    header{
+      position:sticky; top:0; z-index:10; padding:12px 16px; display:flex; gap:12px; align-items:center;
+      background:linear-gradient(180deg, rgba(15,18,32,.9), rgba(15,18,32,.6)); backdrop-filter:blur(8px);
+      border-bottom:1px solid rgba(255,255,255,.08);
+    }
+    header h1{ margin:0; font-size:1.1rem; letter-spacing:.3px }
+    .spacer{flex:1}
+    .pill{
+      display:inline-flex; align-items:center; gap:8px; border:1px solid rgba(255,255,255,.08);
+      background:var(--panel); border-radius:999px; padding:6px 10px; color:var(--muted); font-size:.9rem;
+    }
+    .pill strong{ color:var(--text) }
+    main{ width:min(1100px, 92vw); margin:16px auto 24px; display:grid; gap:12px }
+    #toolbar{
+      display:flex; flex-wrap:wrap; gap:8px; align-items:center; background:var(--panel);
+      padding:10px; border-radius:14px; border:1px solid rgba(255,255,255,.08);
+    }
+    #toolbar input, #toolbar button, #toolbar select{
+      background:#0f132b; color:var(--text); border:1px solid rgba(255,255,255,.1);
+      border-radius:10px; padding:8px 10px; outline:none;
+    }
+    #toolbar button{ background:var(--accent); border:none; cursor:pointer; }
+    #status{ color:var(--muted); font-size:.9rem; margin-left:auto }
+    #editor{
+      min-height:60vh; padding:16px; background:var(--panel);
+      border:1px solid rgba(255,255,255,.1); border-radius:16px; outline:none; line-height:1.6;
+      box-shadow: 0 10px 30px rgba(0,0,0,.25);
+    }
+    #hint{ color:var(--muted); font-size:.9rem; }
+    .row{ display:flex; gap:8px; align-items:center; flex-wrap:wrap }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>📝 Collaborative Document Editor</h1>
+    <div class="spacer"></div>
+    <div class="pill">Users online: <strong id="user-count">1</strong></div>
+  </header>
+
+  <main>
+    <div id="toolbar">
+      <div class="row">
+        <input id="username" type="text" placeholder="Your name (optional)" />
+        <input id="room" type="text" placeholder="Room ID (e.g., default)" />
+        <button id="join">Join Room</button>
+      </div>
+      <div class="spacer"></div>
+      <div id="status">Disconnected</div>
+    </div>
+
+    <div id="editor" contenteditable="true" spellcheck="true" aria-label="Collaborative editor">
+      <h2>Welcome!</h2>
+      <p>Type here and share the link with a friend. Edits will sync in real-time. 👋</p>
+      <ul>
+        <li>Use the Room ID to collaborate on the same doc.</li>
+        <li>Set your name so others can see who’s typing.</li>
+      </ul>
+    </div>
+    <div id="hint">Tip: open this page in two tabs to see live collaboration.</div>
+  </main>
+
+  <!-- Socket.IO client (served by Express/Socket.IO backend) -->
+  <script src="/socket.io/socket.io.js"></script>
+  <script>
+    // --- Simple real-time editor (broadcasts full document text) ---
+    // Backend events expected:
+    //  - "load-document", docText
+    //  - "receive-changes", { text, author }
+    //  - "user-count", number
+    //  - join with: socket.emit("join-room", { roomId, name })
+    //  - send changes: socket.emit("send-changes", { roomId, text, author })
+
+    const editorEl = document.getElementById('editor');
+    const statusEl = document.getElementById('status');
+    const userCountEl = document.getElementById('user-count');
+    const joinBtn = document.getElementById('join');
+    const roomInput = document.getElementById('room');
+    const nameInput = document.getElementById('username');
+
+    let socket;
+    let currentRoom = null;
+    let myName = '';
+
+    // Debounce helpers to limit flood
+    function debounce(fn, ms) {
+      let t; return (...args) => { clearTimeout(t); t = setTimeout(()=>fn(...args), ms); };
+    }
+
+    // Prevent echo loop: when we apply remote text, don't re-send it
+    let applyingRemote = false;
+
+    function connectIfNeeded(){
+      if(socket) return;
+      socket = io();
+
+      socket.on('connect', () => {
+        statusEl.textContent = 'Connected';
+      });
+
+      socket.on('disconnect', () => {
+        statusEl.textContent = 'Disconnected';
+      });
+
+      socket.on('load-document', (docText) => {
+        applyingRemote = true;
+        editorEl.innerHTML = docText || '';
+        applyingRemote = false;
+      });
+
+      socket.on('receive-changes', (payload) => {
+        // payload: { text, author }
+        applyingRemote = true;
+        editorEl.innerHTML = payload?.text ?? editorEl.innerHTML;
+        applyingRemote = false;
+      });
+
+      socket.on('user-count', (n) => {
+        userCountEl.textContent = n;
+      });
+    }
+
+    // Join a room
+    joinBtn.addEventListener('click', () => {
+      const roomId = (roomInput.value || 'default').trim();
+      myName = (nameInput.value || '').trim();
+      if(!roomId){ alert('Enter a room ID'); return; }
+
+      connectIfNeeded();
+      currentRoom = roomId;
+      socket.emit('join-room', { roomId, name: myName });
+      statusEl.textContent = `Joined room: ${roomId}`;      
+    });
+
+    // Broadcast edits (debounced)
+    const broadcastChanges = debounce(() => {
+      if(!socket || !currentRoom) return;
+      if(applyingRemote) return; // don't echo back received updates
+      const text = editorEl.innerHTML;
+      socket.emit('send-changes', { roomId: currentRoom, text, author: myName });
+    }, 250);
+
+    // Listen to local edits
+    ['input','keyup','paste','cut'].forEach(evt => {
+      editorEl.addEventListener(evt, broadcastChanges);
+    });
+
+    // Auto-join a default room if none provided (optional)
+    window.addEventListener('DOMContentLoaded', () => {
+      // Try to read ?room= from URL
+      const u = new URL(window.location.href);
+      const r = u.searchParams.get('room') || 'default';
+      roomInput.value = r;
+      connectIfNeeded();
+      currentRoom = r;
+      socket.emit('join-room', { roomId: r, name: myName });
+      statusEl.textContent = `Joined room: ${r}`;
+    });
+  </script>
+</body>
+</html>
