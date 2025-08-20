@@ -1,0 +1,27 @@
+.App {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 2rem;
+  font-family: Arial, sans-serif;
+  background: #0f1220;
+  color: white;
+  height: 100vh;
+}
+
+h2 {
+  color: #6c8cff;
+}
+
+textarea {
+  width: 80%;
+  height: 60vh;
+  margin-top: 1rem;
+  padding: 1rem;
+  font-size: 1.1rem;
+  border-radius: 10px;
+  border: none;
+  outline: none;
+  background: #151936;
+  color: white;
+}
